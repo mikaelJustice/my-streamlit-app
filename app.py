@@ -22,9 +22,17 @@ st.markdown("""
 if 'all_papers_data' not in st.session_state:
     st.session_state.all_papers_data = {}
 
-# Check if user is accessing admin page
-query_params = st.experimental_get_query_params()
-is_admin_page = "admin" in query_params
+# Check if user is accessing admin page using the new query_params
+try:
+    query_params = st.query_params
+    is_admin_page = "admin" in query_params
+except:
+    # Fallback for older versions
+    try:
+        query_params = st.experimental_get_query_params()
+        is_admin_page = "admin" in query_params
+    except:
+        is_admin_page = False
 
 def extract_all_questions(file_bytes, filename):
     all_questions = []
@@ -75,13 +83,16 @@ def extract_all_questions(file_bytes, filename):
         st.error(f"Error processing {filename}: {str(e)}")
         return []
 
-# ADMIN PAGE - Secret URL: your-app.streamlit.app/?admin
+# ADMIN PAGE - Secret URL: your-app.streamlit.app/?admin=true
 if is_admin_page:
     st.markdown('<h1 class="main-header">🔧 IGCSE Admin Panel</h1>', unsafe_allow_html=True)
     st.markdown('<div class="admin-section">', unsafe_allow_html=True)
     st.header("Administrator Control Center")
     st.markdown("Manage all question papers and system settings")
     st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Admin instructions
+    st.info("**🔑 Admin Access Active** - You are viewing the administrator panel")
     
     # Admin file upload
     admin_files = st.file_uploader("Upload PDF question papers", type="pdf", accept_multiple_files=True, key="admin_upload")
@@ -139,7 +150,7 @@ if is_admin_page:
         
         # Admin instructions
         st.markdown("---")
-        st.info("**Admin Links:**\n- User Portal: Remove `?admin` from URL\n- This Admin Panel: Add `?admin` to URL")
+        st.success("**Admin Links:**\n- User Portal: Remove `?admin=true` from URL\n- This Admin Panel: Add `?admin=true` to URL")
     
     else:
         st.info("👆 Upload PDF papers to build your question database")
@@ -151,6 +162,10 @@ else:
     st.header("Student & Teacher Search Portal")
     st.markdown("Search across all available question papers instantly")
     st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick admin access hint (only visible if no papers)
+    if not st.session_state.all_papers_data:
+        st.warning("No papers available. Admin: Use `?admin=true` in URL to upload papers")
     
     if st.session_state.all_papers_data:
         st.success(f"📚 {len(st.session_state.all_papers_data)} papers available in database")
