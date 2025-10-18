@@ -5,8 +5,10 @@ import tempfile
 import os
 import pickle
 import base64
+from PIL import Image
+import io
 
-st.set_page_config(page_title="IGCSE Question Bank v3", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="IGCSE Question Bank - Complete", page_icon="🔍", layout="wide")
 
 st.markdown("""
 <style>
@@ -21,6 +23,7 @@ st.markdown("""
     .login-section { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2rem; border-radius: 10px; margin: 2rem auto; max-width: 500px; }
     .keyword-highlight { background-color: #ffeb3b; padding: 2px 4px; border-radius: 3px; font-weight: bold; }
     .paper-section { background: linear-gradient(135deg, #ffd89b 0%, #19547b 100%); color: white; padding: 1rem; border-radius: 8px; margin: 1rem 0; }
+    .complete-question { background: white; padding: 1.5rem; border-radius: 8px; margin: 1rem 0; border: 2px solid #28a745; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,8 +66,8 @@ if 'database_initialized' not in st.session_state:
     st.session_state.database_initialized = True
     st.session_state.admin_logged_in = False
 
-def extract_complete_questions_with_context(file_bytes, filename):
-    """Enhanced extraction that captures complete questions with full context"""
+def extract_complete_questions_preserved(file_bytes, filename):
+    """Extract COMPLETE questions without cutting off any content"""
     all_questions = []
     
     try:
@@ -73,44 +76,84 @@ def extract_complete_questions_with_context(file_bytes, filename):
             tmp_path = tmp_file.name
         
         with pdfplumber.open(tmp_path) as pdf:
-            full_text = ""
             for page_num, page in enumerate(pdf.pages, 1):
-                page_text = page.extract_text() or ""
-                full_text += f"\n--- Page {page_num} ---\n{page_text}"
+                # Extract the entire page text
+                full_page_text = page.extract_text() or ""
+                if not full_page_text:
+                    continue
                 
-                # Check for diagrams
+                # Clean but preserve ALL content
+                cleaned_text = re.sub(r'\n+', '\n', full_page_text)
+                
+                # Check for diagrams on this page
                 has_diagram = bool(page.images)
                 
-                # Enhanced question patterns
-                patterns = [
-                    # Complete numbered questions
-                    r'(\b\d+[\.\)]\s+.*?)(?=\b\d+[\.\)]|\bQuestion\s+\d+|\s*[A-Z][a-z]{2,}\s|\s*$)',
-                    # Multiple choice blocks
-                    r'([A-D][\.\)]\s+.*?(?:\s+[A-D][\.\)]\s+.*?)*)(?=\s*\d+[\.\)]|\s*$)',
-                    # Question format
-                    r'(Question\s+\d+.*?)(?=Question\s+\d+|\d+[\.\)]|\s*$)'
+                # NEW APPROACH: Extract by question numbers and preserve EVERYTHING between them
+                question_numbers = re.findall(r'\b(\d+[\.\)])\s+', full_page_text)
+                
+                if question_numbers:
+                    # Split the page text by question numbers to get complete questions
+                    parts = re.split(r'(\b\d+[\.\)]\s+)', full_page_text)
+                    
+                    for i in range(1, len(parts), 2):
+                        if i + 1 < len(parts):
+                            question_number = parts[i].strip()
+                            question_content = parts[i + 1]
+                            
+                            # Find where this question ends (next question number or end)
+                            next_question_start = None
+                            for j in range(i + 2, len(parts)):
+                                if re.match(r'\b\d+[\.\)]\s+', parts[j]):
+                                    next_question_start = j
+                                    break
+                            
+                            if next_question_start:
+                                # Include all content until next question
+                                full_question = question_number + " " + "".join(parts[i+1:next_question_start])
+                            else:
+                                # This is the last question on the page
+                                full_question = question_number + " " + "".join(parts[i+1:])
+                            
+                            # Clean up but preserve ALL content
+                            full_question = re.sub(r'\n+', '\n', full_question).strip()
+                            
+                            if len(full_question) > 10:  # Very lenient filter
+                                # Determine question type
+                                if re.search(r'[A-D][\.\)]', full_question):
+                                    question_type = "Multiple Choice"
+                                else:
+                                    question_type = "Standard"
+                                
+                                all_questions.append({
+                                    'text': full_question,
+                                    'page': page_num,
+                                    'source': filename,
+                                    'type': question_type,
+                                    'has_diagram': has_diagram,
+                                    'full_page_content': full_page_text,
+                                    'question_context': full_question,  # Use the complete question as context
+                                    'original_structure': full_question,
+                                    'question_number': question_number.replace('.', '').replace(')', '')
+                                })
+                
+                # Also capture questions that start with "Question X" format
+                question_patterns = [
+                    r'(Question\s+\d+.*?)(?=Question\s+\d+|\d+[\.\)]|\s*$)',
+                    r'(\b\d+[\.\)]\s+.*)'
                 ]
                 
-                for pattern in patterns:
-                    matches = re.findall(pattern, page_text, re.DOTALL | re.IGNORECASE)
+                for pattern in question_patterns:
+                    matches = re.findall(pattern, full_page_text, re.DOTALL)
                     for match in matches:
                         if isinstance(match, tuple):
                             match = match[0]
                         
                         question_text = match.strip()
-                        
-                        if (len(question_text) > 25 and 
-                            not any(header in question_text.lower() for header in 
-                                   ['page', 'copyright', 'instruction', 'total', 'mark', 'blank'])):
-                            
-                            # Determine question type
-                            if re.search(r'^[A-D][\.\)]', question_text, re.MULTILINE):
+                        if len(question_text) > 20 and question_text not in [q['text'] for q in all_questions]:
+                            if re.search(r'[A-D][\.\)]', question_text):
                                 question_type = "Multiple Choice"
                             else:
                                 question_type = "Standard"
-                            
-                            # Get broader context
-                            context = get_question_context(question_text, page_text)
                             
                             all_questions.append({
                                 'text': question_text,
@@ -118,18 +161,20 @@ def extract_complete_questions_with_context(file_bytes, filename):
                                 'source': filename,
                                 'type': question_type,
                                 'has_diagram': has_diagram,
-                                'full_page_content': page_text,
-                                'question_context': context,
-                                'original_structure': question_text
+                                'full_page_content': full_page_text,
+                                'question_context': question_text,
+                                'original_structure': question_text,
+                                'question_number': str(len(all_questions) + 1)
                             })
         
         os.unlink(tmp_path)
         
-        # Remove duplicates
+        # Remove duplicates while preserving order
         seen = set()
         unique_questions = []
         for q in all_questions:
-            identifier = f"{q['text'][:150]}_{q['page']}"
+            # Use a generous identifier to avoid removing similar but different questions
+            identifier = f"{q['text'][:200]}_{q['page']}"
             if identifier not in seen:
                 seen.add(identifier)
                 unique_questions.append(q)
@@ -140,17 +185,20 @@ def extract_complete_questions_with_context(file_bytes, filename):
         st.error(f"Error processing {filename}: {str(e)}")
         return []
 
-def get_question_context(question_text, page_text):
-    """Get broader context around the question"""
-    start_idx = page_text.find(question_text)
-    if start_idx == -1:
-        return question_text
+def organize_questions_by_paper(questions):
+    """Organize questions by paper"""
+    organized = {}
+    for question in questions:
+        paper_name = question['source']
+        if paper_name not in organized:
+            organized[paper_name] = []
+        organized[paper_name].append(question)
     
-    context_start = max(0, start_idx - 150)
-    context_end = min(len(page_text), start_idx + len(question_text) + 300)
+    # Sort by page and question number
+    for paper in organized:
+        organized[paper].sort(key=lambda x: (x['page'], x.get('question_number', '0')))
     
-    context = page_text[context_start:context_end]
-    return re.sub(r'\s+', ' ', context).strip()
+    return organized
 
 # Check admin access
 show_admin_login = st.sidebar.checkbox("🔧 Access Admin Panel")
@@ -181,10 +229,10 @@ if show_admin_login:
         st.stop()
     
     # ADMIN PANEL
-    st.markdown('<h1 class="main-header">🔧 IGCSE Admin Panel v3</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🔧 IGCSE Admin - Complete Questions</h1>', unsafe_allow_html=True)
     st.markdown('<div class="admin-section">', unsafe_allow_html=True)
-    st.header("Administrator Control Center - ENHANCED VERSION")
-    st.markdown("Complete question extraction with diagrams and context")
+    st.header("Administrator - PRESERVES ALL CONTENT")
+    st.markdown("Now extracts COMPLETE questions without cutting off information")
     st.markdown('</div>', unsafe_allow_html=True)
     
     col1, col2 = st.columns([3, 1])
@@ -193,15 +241,15 @@ if show_admin_login:
             st.session_state.admin_logged_in = False
             st.rerun()
     
-    st.info("**🔑 ADMIN PANEL v3 ACTIVE** - Enhanced question extraction")
+    st.success("**✅ ENHANCED: Preserves complete questions and diagrams**")
     
     admin_files = st.file_uploader("Upload PDF question papers", type="pdf", accept_multiple_files=True, key="admin_upload")
     
     if admin_files:
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("🚀 Process and Add Papers", type="primary", use_container_width=True):
-                with st.spinner("Processing with ENHANCED extraction..."):
+            if st.button("🚀 Process with Complete Extraction", type="primary", use_container_width=True):
+                with st.spinner("Processing with COMPLETE question preservation..."):
                     for uploaded_file in admin_files:
                         file_bytes = uploaded_file.getvalue()
                         st.session_state.all_papers_data[uploaded_file.name] = {
@@ -209,19 +257,19 @@ if show_admin_login:
                             'questions': []
                         }
                     if save_database(st.session_state.all_papers_data):
-                        st.success(f"✅ Added {len(admin_files)} papers with ENHANCED extraction!")
+                        st.success(f"✅ Added {len(admin_files)} papers with COMPLETE question extraction!")
                         st.balloons()
         with col2:
             if st.button("🔄 Reprocess All", type="secondary", use_container_width=True):
-                with st.spinner("Reprocessing ALL papers..."):
+                with st.spinner("Reprocessing ALL with complete preservation..."):
                     for paper_name, paper_data in st.session_state.all_papers_data.items():
                         file_bytes = base64_to_bytes(paper_data['bytes_base64'])
-                        paper_data['questions'] = extract_complete_questions_with_context(file_bytes, paper_name)
+                        paper_data['questions'] = extract_complete_questions_preserved(file_bytes, paper_name)
                     if save_database(st.session_state.all_papers_data):
-                        st.success("✅ ALL papers reprocessed with enhanced extraction!")
+                        st.success("✅ ALL papers reprocessed with COMPLETE question preservation!")
     
     if st.session_state.all_papers_data:
-        st.markdown("### 📋 Paper Database - ENHANCED VERSION")
+        st.markdown("### 📋 Paper Database - COMPLETE QUESTIONS")
         
         for paper_name, paper_data in st.session_state.all_papers_data.items():
             col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
@@ -229,16 +277,18 @@ if show_admin_login:
                 st.write(f"**{paper_name}**")
                 if paper_data['questions']:
                     diagrams_count = sum(1 for q in paper_data['questions'] if q['has_diagram'])
+                    sample_question = paper_data['questions'][0]['text'][:100] + "..." if len(paper_data['questions'][0]['text']) > 100 else paper_data['questions'][0]['text']
                     st.write(f"Questions: {len(paper_data['questions'])} | Diagrams: {diagrams_count}")
+                    st.caption(f"Sample: {sample_question}")
                 else:
                     st.write("Not processed yet")
             with col2:
                 if st.button(f"🔄 Process", key=f"process_{paper_name}"):
                     with st.spinner(f"Processing {paper_name}..."):
                         file_bytes = base64_to_bytes(paper_data['bytes_base64'])
-                        paper_data['questions'] = extract_complete_questions_with_context(file_bytes, paper_name)
+                        paper_data['questions'] = extract_complete_questions_preserved(file_bytes, paper_name)
                     if save_database(st.session_state.all_papers_data):
-                        st.success(f"✅ {paper_name} processed with enhanced extraction!")
+                        st.success(f"✅ {paper_name} processed with complete extraction!")
             with col3:
                 if st.button(f"🗑️ Remove", key=f"remove_{paper_name}"):
                     del st.session_state.all_papers_data[paper_name]
@@ -247,19 +297,19 @@ if show_admin_login:
                         st.rerun()
             with col4:
                 if paper_data['questions']:
-                    st.write(f"✅ Enhanced")
+                    st.write(f"✅ Complete")
                 else:
                     st.write("❌ Needs processing")
     
     else:
-        st.info("👆 Upload PDF papers to build your enhanced database")
+        st.info("👆 Upload PDF papers to build your complete question database")
 
 else:
-    # USER PANEL - ENHANCED VERSION
-    st.markdown('<h1 class="main-header">📚 IGCSE Question Bank v3</h1>', unsafe_allow_html=True)
+    # USER PANEL - COMPLETE QUESTIONS
+    st.markdown('<h1 class="main-header">📚 IGCSE Question Bank - Complete</h1>', unsafe_allow_html=True)
     st.markdown('<div class="user-section">', unsafe_allow_html=True)
-    st.header("ENHANCED Search Portal - Complete Questions & Diagrams")
-    st.markdown("Now with full question context and diagram detection")
+    st.header("Search Portal - PRESERVES ALL QUESTION CONTENT")
+    st.markdown("Now shows COMPLETE questions without cutting off information")
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Load database
@@ -271,15 +321,15 @@ else:
         ready_papers = {name: data for name, data in st.session_state.all_papers_data.items() if data['questions']}
         
         if ready_papers:
-            st.success(f"📚 {len(ready_papers)} papers available with ENHANCED extraction")
+            st.success(f"📚 {len(ready_papers)} papers available with COMPLETE questions")
             
-            col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+            col1, col2, col3 = st.columns([3, 1, 1])
             
             with col1:
                 keyword = st.text_input(
                     "🔍 Enter topic or keyword:",
-                    placeholder="e.g., algebra, photosynthesis, diagram, graph, circuit...",
-                    help="ENHANCED: Searches complete questions and context"
+                    placeholder="e.g., titration, electrolysis, diagram, graph...",
+                    help="Searches COMPLETE questions without cutting off content"
                 )
             
             with col2:
@@ -290,95 +340,72 @@ else:
                 st.markdown("<br>", unsafe_allow_html=True)
                 include_diagrams = st.checkbox("Include Diagrams", value=True)
             
-            with col4:
-                st.markdown("<br>", unsafe_allow_html=True)
-                show_full_context = st.checkbox("Full Context", value=True)
-            
             if search_clicked and keyword:
                 all_matching_questions = []
                 
                 for paper_name, paper_data in ready_papers.items():
                     for question in paper_data['questions']:
-                        # Enhanced search across all content
+                        # Search across ALL question content
                         text_match = keyword.lower() in question['text'].lower()
                         context_match = keyword.lower() in question['question_context'].lower()
                         page_match = keyword.lower() in question['full_page_content'].lower()
                         diagram_match = any(diagram_word in keyword.lower() for diagram_word in 
-                                          ['diagram', 'graph', 'chart', 'figure']) and question['has_diagram']
+                                          ['diagram', 'graph', 'chart', 'figure', 'image']) and question['has_diagram']
                         
+                        # If found ANYWHERE, include the COMPLETE question
                         if text_match or context_match or page_match or (include_diagrams and diagram_match):
                             question['search_keyword'] = keyword
                             if diagram_match:
                                 question['match_type'] = 'diagram'
-                            elif context_match:
+                            elif context_match or page_match:
                                 question['match_type'] = 'context'
                             else:
                                 question['match_type'] = 'direct'
                             all_matching_questions.append(question)
                 
                 if all_matching_questions:
-                    st.success(f"🎉 ENHANCED: Found {len(all_matching_questions)} complete questions!")
+                    st.success(f"🎉 Found {len(all_matching_questions)} COMPLETE questions!")
                     
-                    # Group by paper
-                    questions_by_paper = {}
-                    for q in all_matching_questions:
-                        if q['source'] not in questions_by_paper:
-                            questions_by_paper[q['source']] = []
-                        questions_by_paper[q['source']].append(q)
+                    # Organize by paper
+                    organized_questions = organize_questions_by_paper(all_matching_questions)
                     
-                    for paper_name, paper_questions in questions_by_paper.items():
+                    for paper_name, paper_questions in organized_questions.items():
                         st.markdown(f'<div class="paper-section">', unsafe_allow_html=True)
                         st.markdown(f'<h3 class="file-header">📄 {paper_name} ({len(paper_questions)} questions)</h3>')
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                         for i, question in enumerate(paper_questions, 1):
-                            highlighted_text = highlight_keyword(question['original_structure'], keyword)
-                            highlighted_context = highlight_keyword(question['question_context'], keyword)
+                            # Highlight the keyword in the COMPLETE question
+                            highlighted_question = highlight_keyword(question['original_structure'], keyword)
                             
-                            if show_full_context:
-                                st.markdown(f"""
-                                <div class="full-question">
-                                    <strong>🔍 Q{i} (Page {question['page']}) - COMPLETE QUESTION:</strong><br>
-                                    <em>Match type: {question['match_type'].upper()}</em><br><br>
-                                    <div style="white-space: pre-wrap; background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd;">
-                                    {highlighted_context}
-                                    </div>
+                            st.markdown(f"""
+                            <div class="complete-question">
+                                <strong>🔍 Question {i} (Page {question['page']}) - {question['type']}:</strong><br>
+                                <em>Match type: {question['match_type'].upper()}</em>
+                                {'' if not question['has_diagram'] else ' • 🖼️ <strong>CONTAINS DIAGRAMS</strong>'}<br><br>
+                                <div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.5; font-size: 14px;">
+                                {highlighted_question}
                                 </div>
-                                """, unsafe_allow_html=True)
-                            else:
-                                if question['has_diagram']:
-                                    st.markdown(f"""
-                                    <div class="diagram-found">
-                                        <strong>📊 Q{i} (Page {question['page']}) - DIAGRAM QUESTION:</strong><br>
-                                        {highlighted_text}
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                                elif question['type'] == "Multiple Choice":
-                                    st.markdown(f"""
-                                    <div class="multiple-choice">
-                                        <strong>✅ Q{i} (Page {question['page']}) - MULTIPLE CHOICE:</strong><br>
-                                        {highlighted_text}
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                                else:
-                                    st.markdown(f"""
-                                    <div class="question-box">
-                                        <strong>📝 Q{i} (Page {question['page']}):</strong><br>
-                                        {highlighted_text}
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                            
-                            if question['has_diagram']:
-                                st.info(f"🖼️ **Contains diagrams on page {question['page']}**")
+                            </div>
+                            """, unsafe_allow_html=True)
                 
                 else:
                     st.warning(f"🔍 No questions found containing '{keyword}'")
+                    st.info("💡 Try different keywords or check spelling")
             
             elif search_clicked and not keyword:
                 st.warning("⚠️ Please enter a search keyword first!")
+            
+            # Show sample of available questions
+            with st.expander("📋 Sample Available Questions"):
+                sample_paper = list(ready_papers.keys())[0]
+                sample_questions = ready_papers[sample_paper]['questions'][:3]
+                st.write(f"**Sample from {sample_paper}:**")
+                for i, q in enumerate(sample_questions, 1):
+                    st.write(f"{i}. {q['text'][:150]}...")
         
         else:
-            st.info("📚 Papers are being processed with enhanced extraction...")
+            st.info("📚 Papers are being processed with complete question extraction...")
     
     else:
         st.info("📚 No papers available yet. Admin will upload papers.")
@@ -386,6 +413,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>IGCSE Question Bank v3 • Enhanced Complete Question Extraction • Diagram Detection • Organized Papers</p>
+    <p>IGCSE Question Bank • Complete Question Preservation • No Content Cutting • Diagram Detection</p>
 </div>
 """, unsafe_allow_html=True)
