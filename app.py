@@ -4,7 +4,7 @@ import re
 import tempfile
 import os
 
-st.set_page_config(page_title="IGCSE Smart Question Bank", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="IGCSE Question Bank", page_icon="🔍", layout="wide")
 
 st.markdown("""
 <style>
@@ -18,8 +18,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Initialize session state
 if 'all_papers_data' not in st.session_state:
     st.session_state.all_papers_data = {}
+
+# Check if user is accessing admin page
+query_params = st.experimental_get_query_params()
+is_admin_page = "admin" in query_params
 
 def extract_all_questions(file_bytes, filename):
     all_questions = []
@@ -70,88 +75,15 @@ def extract_all_questions(file_bytes, filename):
         st.error(f"Error processing {filename}: {str(e)}")
         return []
 
-st.markdown('<h1 class="main-header">📚 IGCSE Smart Question Bank</h1>', unsafe_allow_html=True)
-
-tab1, tab2 = st.tabs(["🎓 User Search Portal", "🔧 Admin Management Panel"])
-
-with tab1:
-    st.markdown('<div class="user-section">', unsafe_allow_html=True)
-    st.header("🎓 Student & Teacher Search Portal")
-    st.markdown("Search across all available question papers instantly")
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    if st.session_state.all_papers_data:
-        st.success(f"📚 {len(st.session_state.all_papers_data)} papers available in database")
-        col1, col2, col3 = st.columns([3, 1, 1])
-        with col1:
-            keyword = st.text_input("🔍 Enter topic or keyword:", placeholder="e.g., algebra, photosynthesis, diagram, graph, circuit...")
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            search_clicked = st.button("🚀 Search Questions", type="primary", use_container_width=True)
-        with col3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            include_diagrams = st.checkbox("Include Diagrams", value=True)
-        
-        if search_clicked and keyword:
-            all_matching_questions = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            paper_names = list(st.session_state.all_papers_data.keys())
-            for idx, paper_name in enumerate(paper_names):
-                status_text.text(f"🔍 Searching in: {paper_name}...")
-                paper_data = st.session_state.all_papers_data[paper_name]
-                if not paper_data['questions']:
-                    with st.spinner(f"Processing {paper_name}..."):
-                        paper_data['questions'] = extract_all_questions(paper_data['bytes'], paper_name)
-                for question in paper_data['questions']:
-                    text_match = keyword.lower() in question['text'].lower()
-                    content_match = keyword.lower() in question['full_page_content'].lower()
-                    diagram_keywords = ['diagram', 'graph', 'chart', 'figure', 'drawing', 'image', 'picture', 'map', 'circuit']
-                    diagram_match = any(diagram_word in keyword.lower() for diagram_word in diagram_keywords) and question['has_diagram']
-                    if text_match or content_match or (include_diagrams and diagram_match):
-                        if diagram_match and question['has_diagram']:
-                            question['match_reason'] = 'diagram'
-                        elif content_match and not text_match:
-                            question['match_reason'] = 'related_content'
-                        else:
-                            question['match_reason'] = 'direct_text'
-                        all_matching_questions.append(question)
-                progress_bar.progress((idx + 1) / len(paper_names))
-            progress_bar.empty()
-            status_text.empty()
-            
-            if all_matching_questions:
-                st.success(f"🎉 Found {len(all_matching_questions)} questions matching '{keyword}'!")
-                questions_by_paper = {}
-                for q in all_matching_questions:
-                    if q['source'] not in questions_by_paper:
-                        questions_by_paper[q['source']] = []
-                    questions_by_paper[q['source']].append(q)
-                for paper_name, paper_questions in questions_by_paper.items():
-                    st.markdown(f'<h3 class="file-header">📄 {paper_name} ({len(paper_questions)} questions)</h3>', unsafe_allow_html=True)
-                    paper_questions.sort(key=lambda x: x['page'])
-                    for i, question in enumerate(paper_questions, 1):
-                        if question.get('match_reason') == 'diagram':
-                            st.markdown(f"""<div class="diagram-found"><strong>🔍 Q{i} (Page {question['page']}) - Diagram Related:</strong><br><em>Keyword found in diagram/illustration</em><br>{question['text']}</div>""", unsafe_allow_html=True)
-                        elif question.get('match_reason') == 'related_content':
-                            st.markdown(f"""<div class="question-box"><strong>📖 Q{i} (Page {question['page']}) - Related Content:</strong><br><em>Keyword found in related question parts</em><br>{question['text']}</div>""", unsafe_allow_html=True)
-                        elif question['type'] == "Multiple Choice":
-                            st.markdown(f"""<div class="multiple-choice"><strong>✅ Q{i} (Page {question['page']}) - Multiple Choice:</strong><br>{question['text']}</div>""", unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"""<div class="question-box"><strong>📝 Q{i} (Page {question['page']}):</strong><br>{question['text']}</div>""", unsafe_allow_html=True)
-            else:
-                st.warning(f"🔍 No questions found containing '{keyword}'")
-        elif search_clicked and not keyword:
-            st.warning("⚠️ Please enter a search keyword first!")
-    else:
-        st.info("📚 No papers available yet. Ask admin to upload papers in the Admin Panel.")
-
-with tab2:
+# ADMIN PAGE - Secret URL: your-app.streamlit.app/?admin
+if is_admin_page:
+    st.markdown('<h1 class="main-header">🔧 IGCSE Admin Panel</h1>', unsafe_allow_html=True)
     st.markdown('<div class="admin-section">', unsafe_allow_html=True)
-    st.header("🔧 Admin Management Panel")
-    st.markdown("Upload and manage question papers for the entire system")
+    st.header("Administrator Control Center")
+    st.markdown("Manage all question papers and system settings")
     st.markdown('</div>', unsafe_allow_html=True)
     
+    # Admin file upload
     admin_files = st.file_uploader("Upload PDF question papers", type="pdf", accept_multiple_files=True, key="admin_upload")
     
     if admin_files:
@@ -171,8 +103,10 @@ with tab2:
                         paper_data['questions'] = extract_all_questions(paper_data['bytes'], paper_name)
                 st.success("✅ All papers reprocessed!")
     
+    # Paper management
     if st.session_state.all_papers_data:
-        st.markdown("### 📋 Current Paper Database")
+        st.markdown("### 📋 Paper Database Management")
+        
         for paper_name, paper_data in st.session_state.all_papers_data.items():
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
@@ -192,8 +126,181 @@ with tab2:
                     del st.session_state.all_papers_data[paper_name]
                     st.success(f"✅ {paper_name} removed!")
                     st.rerun()
+        
+        # Database summary
+        st.markdown("---")
+        total_questions = sum(len(data['questions']) for data in st.session_state.all_papers_data.values())
+        total_diagrams = sum(sum(1 for q in data['questions'] if q['has_diagram']) for data in st.session_state.all_papers_data.values())
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Papers", len(st.session_state.all_papers_data))
+        col2.metric("Total Questions", total_questions)
+        col3.metric("Questions with Diagrams", total_diagrams)
+        
+        # Admin instructions
+        st.markdown("---")
+        st.info("**Admin Links:**\n- User Portal: Remove `?admin` from URL\n- This Admin Panel: Add `?admin` to URL")
+    
     else:
         st.info("👆 Upload PDF papers to build your question database")
 
+# USER PAGE - Normal URL: your-app.streamlit.app
+else:
+    st.markdown('<h1 class="main-header">📚 IGCSE Question Bank</h1>', unsafe_allow_html=True)
+    st.markdown('<div class="user-section">', unsafe_allow_html=True)
+    st.header("Student & Teacher Search Portal")
+    st.markdown("Search across all available question papers instantly")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    if st.session_state.all_papers_data:
+        st.success(f"📚 {len(st.session_state.all_papers_data)} papers available in database")
+        
+        # Enhanced search interface
+        col1, col2, col3 = st.columns([3, 1, 1])
+        
+        with col1:
+            keyword = st.text_input(
+                "🔍 Enter topic or keyword:",
+                placeholder="e.g., algebra, photosynthesis, diagram, graph, circuit...",
+                help="Search text and diagrams across all question papers"
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            search_clicked = st.button("🚀 Search Questions", type="primary", use_container_width=True)
+        
+        with col3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            include_diagrams = st.checkbox("Include Diagrams", value=True, help="Search questions with diagrams")
+        
+        # Process search
+        if search_clicked and keyword:
+            all_matching_questions = []
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            paper_names = list(st.session_state.all_papers_data.keys())
+            for idx, paper_name in enumerate(paper_names):
+                status_text.text(f"🔍 Searching in: {paper_name}...")
+                
+                paper_data = st.session_state.all_papers_data[paper_name]
+                
+                # Extract questions if not already done
+                if not paper_data['questions']:
+                    with st.spinner(f"Processing {paper_name}..."):
+                        paper_data['questions'] = extract_all_questions(paper_data['bytes'], paper_name)
+                
+                # Enhanced search
+                for question in paper_data['questions']:
+                    text_match = keyword.lower() in question['text'].lower()
+                    content_match = keyword.lower() in question['full_page_content'].lower()
+                    diagram_keywords = ['diagram', 'graph', 'chart', 'figure', 'drawing', 'image', 'picture', 'map', 'circuit']
+                    diagram_match = any(diagram_word in keyword.lower() for diagram_word in diagram_keywords) and question['has_diagram']
+                    
+                    if text_match or content_match or (include_diagrams and diagram_match):
+                        if diagram_match and question['has_diagram']:
+                            question['match_reason'] = 'diagram'
+                        elif content_match and not text_match:
+                            question['match_reason'] = 'related_content'
+                        else:
+                            question['match_reason'] = 'direct_text'
+                        
+                        all_matching_questions.append(question)
+                
+                progress_bar.progress((idx + 1) / len(paper_names))
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            # Display results
+            if all_matching_questions:
+                st.success(f"🎉 Found {len(all_matching_questions)} questions matching '{keyword}'!")
+                
+                # Group by paper
+                questions_by_paper = {}
+                for q in all_matching_questions:
+                    if q['source'] not in questions_by_paper:
+                        questions_by_paper[q['source']] = []
+                    questions_by_paper[q['source']].append(q)
+                
+                # Display organized results
+                for paper_name, paper_questions in questions_by_paper.items():
+                    st.markdown(f'<h3 class="file-header">📄 {paper_name} ({len(paper_questions)} questions)</h3>', unsafe_allow_html=True)
+                    
+                    # Sort questions by page number
+                    paper_questions.sort(key=lambda x: x['page'])
+                    
+                    for i, question in enumerate(paper_questions, 1):
+                        if question.get('match_reason') == 'diagram':
+                            st.markdown(f"""
+                            <div class="diagram-found">
+                                <strong>🔍 Q{i} (Page {question['page']}) - Diagram Related:</strong><br>
+                                <em>Keyword found in diagram/illustration</em><br>
+                                {question['text']}
+                            </div>
+                            """, unsafe_allow_html=True)
+                        elif question.get('match_reason') == 'related_content':
+                            st.markdown(f"""
+                            <div class="question-box">
+                                <strong>📖 Q{i} (Page {question['page']}) - Related Content:</strong><br>
+                                <em>Keyword found in related question parts</em><br>
+                                {question['text']}
+                            </div>
+                            """, unsafe_allow_html=True)
+                        elif question['type'] == "Multiple Choice":
+                            st.markdown(f"""
+                            <div class="multiple-choice">
+                                <strong>✅ Q{i} (Page {question['page']}) - Multiple Choice:</strong><br>
+                                {question['text']}
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                            <div class="question-box">
+                                <strong>📝 Q{i} (Page {question['page']}):</strong><br>
+                                {question['text']}
+                            </div>
+                            """, unsafe_allow_html=True)
+            
+            else:
+                st.warning(f"🔍 No questions found containing '{keyword}'")
+                st.info("💡 Try different keywords or check the spelling")
+        
+        elif search_clicked and not keyword:
+            st.warning("⚠️ Please enter a search keyword first!")
+        
+        # Show database statistics
+        with st.expander("📊 Database Statistics"):
+            col1, col2, col3 = st.columns(3)
+            total_questions = 0
+            total_diagrams = 0
+            
+            for paper_name, paper_data in st.session_state.all_papers_data.items():
+                if not paper_data['questions']:
+                    with st.spinner(f"Processing {paper_name}..."):
+                        paper_data['questions'] = extract_all_questions(paper_data['bytes'], paper_name)
+                total_questions += len(paper_data['questions'])
+                total_diagrams += sum(1 for q in paper_data['questions'] if q['has_diagram'])
+            
+            col1.metric("Papers Available", len(st.session_state.all_papers_data))
+            col2.metric("Total Questions", total_questions)
+            col3.metric("Questions with Diagrams", total_diagrams)
+    
+    else:
+        st.info("📚 No papers available yet. The administrator will upload papers soon.")
+        st.markdown("""
+        ### 🎯 Enhanced Search Features:
+        - **Text Search**: Find keywords in question text
+        - **Diagram Detection**: Find questions with diagrams/graphs
+        - **Related Content**: Find questions where keyword appears in related parts
+        - **Multiple Choice**: Special formatting for MCQ questions
+        """)
+
+# Footer
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: #666;'><p>IGCSE Smart Question Bank • Separate Admin/User Panels • Enhanced Diagram Search</p></div>", unsafe_allow_html=True)
+st.markdown("""
+<div style='text-align: center; color: #666;'>
+    <p>IGCSE Question Bank • Separate Admin Portal • Enhanced Search • Professional System</p>
+</div>
+""", unsafe_allow_html=True)
