@@ -127,10 +127,10 @@ with st.sidebar:
     4. **Browse results** organized by file
     
     **Example searches:**
-    - algebra
+    - ionic equation
     - photosynthesis  
     - world war
-    - Shakespeare
+    - Shakespeare poems
     - chemistry
     """)
     
