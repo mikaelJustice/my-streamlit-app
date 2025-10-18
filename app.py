@@ -18,11 +18,13 @@ st.markdown("""
     .admin-section { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 1.5rem; border-radius: 10px; margin-bottom: 2rem; }
     .user-section { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); color: white; padding: 1.5rem; border-radius: 10px; margin-bottom: 2rem; }
     .diagram-found { background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%); padding: 1rem; border-radius: 8px; margin: 0.5rem 0; border-left: 4px solid #ff6b6b; }
+    .login-section { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2rem; border-radius: 10px; margin: 2rem auto; max-width: 500px; }
 </style>
 """, unsafe_allow_html=True)
 
-# SHARED DATABASE SYSTEM - This persists across all users
+# SHARED DATABASE SYSTEM
 DB_FILE = "question_database.pkl"
+ADMIN_PASSWORD = "admin123"  # Change this password!
 
 def load_database():
     """Load the shared database from file"""
@@ -55,6 +57,7 @@ def base64_to_bytes(base64_str):
 if 'database_initialized' not in st.session_state:
     st.session_state.all_papers_data = load_database()
     st.session_state.database_initialized = True
+    st.session_state.admin_logged_in = False
 
 def extract_all_questions(file_bytes, filename):
     all_questions = []
@@ -105,24 +108,48 @@ def extract_all_questions(file_bytes, filename):
         st.error(f"Error processing {filename}: {str(e)}")
         return []
 
-# Check if user is accessing admin page
-try:
-    query_params = st.query_params
-    is_admin_page = query_params.get("admin", [""])[0].lower() == "true"
-except:
-    try:
-        query_params = st.experimental_get_query_params()
-        is_admin_page = query_params.get("admin", [""])[0].lower() == "true"
-    except:
-        is_admin_page = False
+# Check if user wants to access admin panel
+show_admin_login = st.sidebar.checkbox("🔧 Access Admin Panel")
 
-# ADMIN PAGE
-if is_admin_page:
+if show_admin_login:
+    if not st.session_state.admin_logged_in:
+        # Admin Login Section
+        st.markdown('<div class="login-section">', unsafe_allow_html=True)
+        st.markdown('<h2 style="text-align: center; color: white;">🔧 Admin Login</h2>', unsafe_allow_html=True)
+        
+        password = st.text_input("Enter Admin Password:", type="password", key="admin_password")
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("🚀 Login", use_container_width=True):
+                if password == ADMIN_PASSWORD:
+                    st.session_state.admin_logged_in = True
+                    st.success("✅ Admin access granted!")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid password!")
+        
+        with col2:
+            if st.button("👤 Back to User", use_container_width=True):
+                st.session_state.admin_logged_in = False
+                st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.stop()
+    
+    # ADMIN PANEL (Only shown after successful login)
     st.markdown('<h1 class="main-header">🔧 IGCSE Admin Panel</h1>', unsafe_allow_html=True)
     st.markdown('<div class="admin-section">', unsafe_allow_html=True)
     st.header("Administrator Control Center")
     st.markdown("Manage all question papers and system settings")
     st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Admin logout button
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("🚪 Logout Admin"):
+            st.session_state.admin_logged_in = False
+            st.rerun()
     
     st.info("**🔑 Admin Access Active** - You are viewing the administrator panel")
     
@@ -158,7 +185,7 @@ if is_admin_page:
     
     # Paper management
     if st.session_state.all_papers_data:
-        st.markdown("### 📋 Paper Database Management")
+        st.markdown("### �� Paper Database Management")
         
         for paper_name, paper_data in st.session_state.all_papers_data.items():
             col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
@@ -197,18 +224,17 @@ if is_admin_page:
         col1.metric("Total Papers", len(st.session_state.all_papers_data))
         col2.metric("Total Questions", total_questions)
         col3.metric("Questions with Diagrams", total_diagrams)
-        col4.metric("Database Status", "✅ Shared" if save_database(st.session_state.all_papers_data) else "❌ Error")
+        col4.metric("Database Status", "✅ Shared")
         
         # Admin instructions
         st.markdown("---")
-        st.success("**Admin Links:**\n- User Portal: Remove `?admin=true` from URL\n- This Admin Panel: Add `?admin=true` to URL")
-        st.info("**💡 IMPORTANT:** Papers are now stored in a SHARED database. All users can see uploaded papers.")
+        st.success("**💡 IMPORTANT:** Papers are stored in a SHARED database. All users can see uploaded papers.")
     
     else:
         st.info("👆 Upload PDF papers to build your question database")
 
-# USER PAGE
 else:
+    # USER PANEL (Default view for everyone)
     st.markdown('<h1 class="main-header">📚 IGCSE Question Bank</h1>', unsafe_allow_html=True)
     st.markdown('<div class="user-section">', unsafe_allow_html=True)
     st.header("Student & Teacher Search Portal")
@@ -219,7 +245,6 @@ else:
     latest_data = load_database()
     if latest_data != st.session_state.all_papers_data:
         st.session_state.all_papers_data = latest_data
-        st.rerun()
     
     if st.session_state.all_papers_data:
         # Count ready papers (those that have been processed)
@@ -353,7 +378,7 @@ else:
                 col3.metric("Questions with Diagrams", total_diagrams)
         
         else:
-            st.info("📚 Papers are being processed. Please check back soon or ask admin to process them.")
+            st.info("📚 Papers are being processed. Please check back soon.")
     
     else:
         st.info("📚 No papers available yet. The administrator will upload papers soon.")
@@ -362,6 +387,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666;'>
-    <p>IGCSE Question Bank • Shared Database • Real-time Updates • Professional System</p>
+    <p>IGCSE Question Bank • Password-Protected Admin • Shared Database • Professional System</p>
 </div>
 """, unsafe_allow_html=True)
