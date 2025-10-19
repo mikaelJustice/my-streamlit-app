@@ -18,7 +18,6 @@ st.markdown("""
     .user-section { background: linear-gradient(135deg, #00b09b 0%, #96c93d 100%); color: white; padding: 1.5rem; border-radius: 10px; margin-bottom: 2rem; }
     .diagram-indicator { background: #fff3cd; padding: 0.5rem 1rem; border-radius: 5px; margin: 0.5rem 0; border-left: 4px solid #ffc107; }
     .keyword-highlight { background-color: #ffeb3b; padding: 2px 4px; border-radius: 3px; font-weight: bold; }
-    .question-number { color: #1f77b4; font-weight: bold; font-size: 1.1em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -123,7 +122,6 @@ def extract_intelligent_questions(file_bytes, filename):
                             r'\b\d+[\.\)]\s+',  # Next question
                             r'© UCLES',         # Copyright
                             r'\[Turn over\]',   # Page turn
-                            r'\n[A-Z][a-z]+.*\d',  # New section
                         ]
                         
                         # Try to find a clean ending point
@@ -136,8 +134,8 @@ def extract_intelligent_questions(file_bytes, filename):
                         # Clean and validate the question
                         clean_question = clean_text(full_question)
                         
-                        if self.is_valid_question(clean_question):
-                            question_data = self.create_question_data(
+                        if is_valid_question(clean_question):
+                            question_data = create_question_data(
                                 clean_question, page_num, filename, has_diagram, clean_page_text
                             )
                             if question_data:
@@ -151,23 +149,23 @@ def extract_intelligent_questions(file_bytes, filename):
                 
                 for mcq_block in mcq_blocks:
                     clean_mcq = clean_text(mcq_block)
-                    if self.is_valid_question(clean_mcq):
-                        question_data = self.create_question_data(
+                    if is_valid_question(clean_mcq):
+                        question_data = create_question_data(
                             clean_mcq, page_num, filename, has_diagram, clean_page_text, "Multiple Choice"
                         )
-                        if question_data and question_data not in all_questions:
+                        if question_data and not any(q['text'] == question_data['text'] for q in all_questions):
                             all_questions.append(question_data)
         
         os.unlink(tmp_path)
         
         # Remove duplicates and ensure quality
-        return self.deduplicate_questions(all_questions)
+        return deduplicate_questions(all_questions)
         
     except Exception as e:
         st.error(f"Error processing {filename}: {str(e)}")
         return []
 
-def is_valid_question(self, text):
+def is_valid_question(text):
     """Check if text represents a valid question"""
     if not text or len(text) < 25:
         return False
@@ -194,7 +192,7 @@ def is_valid_question(self, text):
     
     return has_indicator and not has_garbage and len(text) > 25
 
-def create_question_data(self, question_text, page_num, filename, has_diagram, full_page_text, question_type=None):
+def create_question_data(question_text, page_num, filename, has_diagram, full_page_text, question_type=None):
     """Create structured question data"""
     if not question_type:
         if re.search(r'[A-D][\.\)]\s+', question_text, re.MULTILINE):
@@ -204,10 +202,11 @@ def create_question_data(self, question_text, page_num, filename, has_diagram, f
     
     # Extract question number
     qnum_match = re.match(r'(\b\d+)[\.\)]\s+', question_text)
-    question_number = qnum_match.group(1) if qnum_match else str(len([q for q in self.all_questions if q['source'] == filename]) + 1)
+    question_number = qnum_match.group(1) if qnum_match else "1"
     
     return {
         'text': question_text,
+        'clean_text': clean_text(question_text),  # Always include clean_text
         'page': page_num,
         'source': filename,
         'type': question_type,
@@ -215,11 +214,10 @@ def create_question_data(self, question_text, page_num, filename, has_diagram, f
         'full_page_content': full_page_text,
         'question_context': question_text,
         'original_structure': question_text,
-        'question_number': question_number,
-        'clean_text': clean_text(question_text)
+        'question_number': question_number
     }
 
-def deduplicate_questions(self, questions):
+def deduplicate_questions(questions):
     """Remove duplicate questions while preserving quality"""
     seen = set()
     unique_questions = []
@@ -228,19 +226,23 @@ def deduplicate_questions(self, questions):
         # Create a signature based on clean content
         signature = f"{clean_text(q['text'])[:200]}_{q['page']}_{q['source']}"
         
-        if signature not in seen and self.is_valid_question(q['text']):
+        if signature not in seen and is_valid_question(q['text']):
             seen.add(signature)
             unique_questions.append(q)
     
     return unique_questions
 
+def safe_get(question, field, default=""):
+    """Safely get a field from question dictionary"""
+    return question.get(field, default)
+
 def format_question_display(question, keyword, question_index):
     """Format question for clean display"""
-    question_text = question.get('clean_text', question.get('text', ''))
+    question_text = safe_get(question, 'clean_text', safe_get(question, 'text', ''))
     highlighted_text = highlight_keyword(question_text, keyword)
     
     # Determine styling
-    if question.get('type') == "Multiple Choice":
+    if safe_get(question, 'type') == "Multiple Choice":
         css_class = "multiple-choice"
         type_icon = "✅"
     else:
@@ -250,8 +252,8 @@ def format_question_display(question, keyword, question_index):
     # Build display
     display_html = f"""
     <div class="{css_class}">
-        <strong>{type_icon} Question {question_index} (Page {question.get('page', 'N/A')})</strong>
-        {'' if not question.get('has_diagram') else ' • 🖼️ <em>Contains diagrams</em>'}<br><br>
+        <strong>{type_icon} Question {question_index} (Page {safe_get(question, 'page', 'N/A')})</strong>
+        {'' if not safe_get(question, 'has_diagram') else ' • 🖼️ <em>Contains diagrams</em>'}<br><br>
         <div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.6; font-size: 14px;">
         {highlighted_text}
         </div>
@@ -344,10 +346,12 @@ if show_admin_login:
             with col1:
                 st.write(f"**{paper_name}**")
                 if paper_data['questions']:
-                    diagrams_count = sum(1 for q in paper_data['questions'] if q['has_diagram'])
-                    sample_question = paper_data['questions'][0]['clean_text'][:150] + "..." if len(paper_data['questions'][0]['clean_text']) > 150 else paper_data['questions'][0]['clean_text']
+                    diagrams_count = sum(1 for q in paper_data['questions'] if safe_get(q, 'has_diagram', False))
+                    # SAFELY get sample question
+                    sample_text = safe_get(paper_data['questions'][0], 'clean_text', safe_get(paper_data['questions'][0], 'text', 'No sample available'))
+                    sample_preview = sample_text[:150] + "..." if len(sample_text) > 150 else sample_text
                     st.write(f"Clean Questions: {len(paper_data['questions'])} | Diagrams: {diagrams_count}")
-                    st.caption(f"Sample: {sample_question}")
+                    st.caption(f"Sample: {sample_preview}")
                 else:
                     st.write("Not processed yet")
             with col2:
@@ -414,14 +418,14 @@ else:
                 for paper_name, paper_data in ready_papers.items():
                     for question in paper_data['questions']:
                         # Clean search in clean text
-                        search_text = question.get('clean_text', '').lower()
+                        search_text = safe_get(question, 'clean_text', safe_get(question, 'text', '')).lower()
                         keyword_lower = keyword.lower()
                         
                         text_match = keyword_lower in search_text
                         diagram_match = any(diagram_word in keyword_lower for diagram_word in 
                                           ['diagram', 'graph', 'chart', 'figure', 'image', 'fig']) 
                         if diagram_match:
-                            diagram_match = diagram_match and question.get('has_diagram', False)
+                            diagram_match = diagram_match and safe_get(question, 'has_diagram', False)
                         
                         if text_match or (show_diagrams and diagram_match):
                             question['search_keyword'] = keyword
@@ -437,9 +441,10 @@ else:
                     # Group by paper
                     questions_by_paper = {}
                     for q in all_matching_questions:
-                        if q['source'] not in questions_by_paper:
-                            questions_by_paper[q['source']] = []
-                        questions_by_paper[q['source']].append(q)
+                        source = safe_get(q, 'source', 'Unknown')
+                        if source not in questions_by_paper:
+                            questions_by_paper[source] = []
+                        questions_by_paper[source].append(q)
                     
                     for paper_name, paper_questions in questions_by_paper.items():
                         st.markdown(f'<h3 class="file-header">📄 {paper_name} ({len(paper_questions)} clean questions)</h3>', unsafe_allow_html=True)
