@@ -131,7 +131,7 @@ def extract_complete_questions_with_diagrams(file_bytes, filename):
                                 'type': question_type,
                                 'has_diagram': has_diagram,
                                 'full_page_content': full_page_text,
-                                'question_context': complete_question,
+                                'question_context': complete_question,  # Use complete question as context
                                 'original_structure': complete_question,
                                 'question_number': question_number.replace('.', '').replace(')', '')
                             })
@@ -144,23 +144,31 @@ def extract_complete_questions_with_diagrams(file_bytes, filename):
                         match = match[0]
                     
                     question_text = match.strip()
-                    if len(question_text) > 25 and question_text not in [q['text'] for q in all_questions]:
-                        if re.search(r'[A-D][\.\)]', question_text, re.MULTILINE):
-                            question_type = "Multiple Choice"
-                        else:
-                            question_type = "Standard"
+                    if len(question_text) > 25:
+                        # Check if this question is already captured
+                        is_duplicate = False
+                        for existing_q in all_questions:
+                            if question_text in existing_q['text'] or existing_q['text'] in question_text:
+                                is_duplicate = True
+                                break
                         
-                        all_questions.append({
-                            'text': question_text,
-                            'page': page_num,
-                            'source': filename,
-                            'type': question_type,
-                            'has_diagram': page_num in diagram_pages,
-                            'full_page_content': full_page_text,
-                            'question_context': question_text,
-                            'original_structure': question_text,
-                            'question_number': f"Q{len(all_questions) + 1}"
-                        })
+                        if not is_duplicate:
+                            if re.search(r'[A-D][\.\)]', question_text, re.MULTILINE):
+                                question_type = "Multiple Choice"
+                            else:
+                                question_type = "Standard"
+                            
+                            all_questions.append({
+                                'text': question_text,
+                                'page': page_num,
+                                'source': filename,
+                                'type': question_type,
+                                'has_diagram': page_num in diagram_pages,
+                                'full_page_content': full_page_text,
+                                'question_context': question_text,  # Use question text as context
+                                'original_structure': question_text,
+                                'question_number': f"Q{len(all_questions) + 1}"
+                            })
         
         os.unlink(tmp_path)
         
@@ -179,40 +187,14 @@ def extract_complete_questions_with_diagrams(file_bytes, filename):
         st.error(f"Error processing {filename}: {str(e)}")
         return []
 
-def extract_diagram_images(file_bytes, filename, page_number):
-    """Extract diagram images from specific page"""
+def safe_search(question, keyword, field):
+    """Safely search in question fields that might be missing"""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(file_bytes)
-            tmp_path = tmp_file.name
-        
-        images = []
-        with pdfplumber.open(tmp_path) as pdf:
-            if page_number <= len(pdf.pages):
-                page = pdf.pages[page_number - 1]
-                
-                # Extract images from the page
-                for img in page.images:
-                    try:
-                        # Crop the image area
-                        bbox = (img['x0'], img['top'], img['x1'], img['bottom'])
-                        cropped_page = page.crop(bbox)
-                        
-                        # Convert to image
-                        img_obj = cropped_page.to_image()
-                        if img_obj:
-                            # Convert to PIL Image
-                            pil_img = Image.open(io.BytesIO(img_obj.original_bytes))
-                            images.append(pil_img)
-                    except Exception as e:
-                        st.error(f"Error extracting image: {e}")
-                        continue
-        
-        os.unlink(tmp_path)
-        return images
-    except Exception as e:
-        st.error(f"Error extracting diagrams from {filename} page {page_number}: {e}")
-        return []
+        if field in question and question[field]:
+            return keyword.lower() in question[field].lower()
+        return False
+    except:
+        return False
 
 # Check admin access
 show_admin_login = st.sidebar.checkbox("🔧 Access Admin Panel")
@@ -361,12 +343,16 @@ else:
                 
                 for paper_name, paper_data in ready_papers.items():
                     for question in paper_data['questions']:
-                        # Enhanced search across all content
-                        text_match = keyword.lower() in question['text'].lower()
-                        context_match = keyword.lower() in question['question_context'].lower()
-                        page_match = keyword.lower() in question['full_page_content'].lower()
-                        diagram_match = any(diagram_word in keyword.lower() for diagram_word in 
-                                          ['diagram', 'graph', 'chart', 'figure', 'image', 'fig']) and question['has_diagram']
+                        # SAFE search across all content - using safe_search function
+                        text_match = safe_search(question, keyword, 'text')
+                        context_match = safe_search(question, keyword, 'question_context')
+                        page_match = safe_search(question, keyword, 'full_page_content')
+                        
+                        # Diagram keyword matching
+                        diagram_keywords = ['diagram', 'graph', 'chart', 'figure', 'image', 'fig']
+                        diagram_match = any(diagram_word in keyword.lower() for diagram_word in diagram_keywords) 
+                        if diagram_match:
+                            diagram_match = diagram_match and question.get('has_diagram', False)
                         
                         if text_match or context_match or page_match or (include_diagrams and diagram_match):
                             question['search_keyword'] = keyword
@@ -392,15 +378,16 @@ else:
                         st.markdown(f'<h3 class="file-header">📄 {paper_name} ({len(paper_questions)} questions)</h3>', unsafe_allow_html=True)
                         
                         for i, question in enumerate(paper_questions, 1):
-                            # Highlight keyword in the COMPLETE question
-                            highlighted_question = highlight_keyword(question['original_structure'], keyword)
+                            # Get the question text safely
+                            question_text = question.get('text', 'No question text available')
+                            highlighted_question = highlight_keyword(question_text, keyword)
                             
                             # Display the COMPLETE question
                             st.markdown(f"""
                             <div class="complete-question">
-                                <strong>🔍 Question {i} (Page {question['page']}) - {question['type']}:</strong><br>
-                                <em>Match: {question['match_type'].upper()}</em>
-                                {'' if not question['has_diagram'] else ' • 🖼️ <strong>CONTAINS DIAGRAMS</strong>'}<br><br>
+                                <strong>🔍 Question {i} (Page {question.get('page', 'N/A')}) - {question.get('type', 'Standard')}:</strong><br>
+                                <em>Match: {question.get('match_type', 'direct').upper()}</em>
+                                {'' if not question.get('has_diagram', False) else ' • 🖼️ <strong>CONTAINS DIAGRAMS</strong>'}<br><br>
                                 <div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.5; font-size: 14px; background: #fafafa; padding: 15px; border-radius: 5px;">
                                 {highlighted_question}
                                 </div>
@@ -408,14 +395,14 @@ else:
                             """, unsafe_allow_html=True)
                             
                             # Show diagram information
-                            if question['has_diagram'] and include_diagrams:
-                                st.markdown("""
+                            if question.get('has_diagram', False) and include_diagrams:
+                                st.markdown(f"""
                                 <div class="diagram-container">
                                     <strong>📊 DIAGRAMS AVAILABLE:</strong><br>
-                                    <em>This question contains diagrams, graphs, or illustrations on page {}</em><br>
+                                    <em>This question contains diagrams, graphs, or illustrations on page {question.get('page', 'N/A')}</em><br>
                                     <small>Note: For full diagram viewing, please refer to the original PDF document.</small>
                                 </div>
-                                """.format(question['page']), unsafe_allow_html=True)
+                                """, unsafe_allow_html=True)
                 
                 else:
                     st.warning(f"🔍 No questions found containing '{keyword}'")
